@@ -4,7 +4,7 @@
   "description": "Minimal Website Analytics backend starter (Express + Postgres)",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node server.js",
     "dev": "NODE_ENV=development nodemon src/server.js",
     "migrate": "node src/db/migrate.js",
     "test": "jest --runInBand"
