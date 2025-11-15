@@ -1,0 +1,85 @@
+const db = require('../db');
+
+function parseDate(d) {
+  if (!d) return null;
+  const x = new Date(d);
+  if (isNaN(x)) return null;
+  return x.toISOString();
+}
+
+exports.collect = async (req, res, next) => {
+  try {
+    const appId = req.appId;
+    const payload = req.body;
+    if (!payload.event || !payload.timestamp) return res.status(400).json({ error: 'event and timestamp required' });
+
+    const q = `INSERT INTO events (app_id, event_name, url, referrer, device, ip_address, user_id, timestamp, metadata)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`;
+    const vals = [
+      appId,
+      payload.event,
+      payload.url || null,
+      payload.referrer || null,
+      payload.device || null,
+      payload.ipAddress || null,
+      payload.userId || null,
+      payload.timestamp,
+      payload.metadata || {}
+    ];
+    await db.query(q, vals);
+    return res.status(201).json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.eventSummary = async (req, res, next) => {
+  try {
+    const { event, startDate, endDate, app_id } = req.query;
+    if (!event) return res.status(400).json({ error: 'event query param required' });
+    const start = parseDate(startDate) || '1970-01-01';
+    const end = parseDate(endDate) || new Date().toISOString();
+
+    // total count
+    const countQ = `SELECT COUNT(*)::int as count FROM events WHERE event_name = $1 AND timestamp >= $2 AND timestamp <= $3 ${app_id ? 'AND app_id = $4' : ''}`;
+    const countRes = app_id ? await db.query(countQ, [event, start, end, app_id]) : await db.query(countQ, [event, start, end]);
+
+    // unique users
+    const uniqQ = `SELECT COUNT(DISTINCT user_id)::int as uniqueusers FROM events WHERE event_name = $1 AND timestamp >= $2 AND timestamp <= $3 ${app_id ? 'AND app_id = $4' : ''}`;
+    const uniqRes = app_id ? await db.query(uniqQ, [event, start, end, app_id]) : await db.query(uniqQ, [event, start, end]);
+
+    // device distribution
+    const deviceQ = `SELECT COALESCE(device,'unknown') as device, COUNT(*)::int as cnt FROM events WHERE event_name = $1 AND timestamp >= $2 AND timestamp <= $3 ${app_id ? 'AND app_id = $4' : ''} GROUP BY device`;
+    const deviceRes = app_id ? await db.query(deviceQ, [event, start, end, app_id]) : await db.query(deviceQ, [event, start, end]);
+
+    const deviceData = {};
+    deviceRes.rows.forEach(r => deviceData[r.device] = r.cnt);
+
+    return res.json({ event, count: countRes.rows[0].count, uniqueUsers: uniqRes.rows[0].uniqueusers, deviceData });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.userStats = async (req, res, next) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    const totalQ = 'SELECT COUNT(*)::int as total FROM events WHERE user_id = $1';
+    const totalRes = await db.query(totalQ, [userId]);
+
+    const recentQ = 'SELECT event_name, timestamp, metadata FROM events WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 10';
+    const recentRes = await db.query(recentQ, [userId]);
+
+    const deviceQ = `SELECT metadata->>'browser' AS browser, COUNT(*)::int as cnt FROM events WHERE user_id = $1 GROUP BY metadata->>'browser'`;
+    const deviceRes = await db.query(deviceQ, [userId]);
+    const deviceDetails = {};
+    deviceRes.rows.forEach(r => deviceDetails[r.browser || 'unknown'] = r.cnt);
+
+    return res.json({ userId, totalEvents: totalRes.rows[0].total, deviceDetails, recentEvents: recentRes.rows });
+  } catch (err) {
+    next(err);
+  }
+};
+
